@@ -1,8 +1,6 @@
 name: Fetch UnrealExporter
 on:
   push:
-    paths:
-      - '.github/workflows/fetch-unreal-exporter.yml'
   workflow_dispatch:
 
 jobs:
