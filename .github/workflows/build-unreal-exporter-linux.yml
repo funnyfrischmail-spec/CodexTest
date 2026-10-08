@@ -1,0 +1,37 @@
+name: Build UnrealExporter Linux
+on:
+  push:
+    paths:
+      - '.github/workflows/build-unreal-exporter-linux.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout UnrealExporter
+        uses: actions/checkout@v4
+        with:
+          repository: luk-gg/UnrealExporter
+          ref: main
+          submodules: recursive
+          path: UnrealExporterSource
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Publish Linux self-contained
+        run: |
+          dotnet publish UnrealExporterSource/UnrealExporter/UnrealExporter.csproj \
+            -c Release -r linux-x64 --self-contained true \
+            -p:PublishSingleFile=false \
+            -o publish-linux
+          chmod +x publish-linux/UnrealExporter || true
+          ls -lah publish-linux
+      - name: Upload Linux build
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnrealExporter-2.0.0-linux-x64
+          path: publish-linux
+          compression-level: 0
+          retention-days: 1
