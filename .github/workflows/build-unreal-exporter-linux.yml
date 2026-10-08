@@ -9,31 +9,100 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout UnrealExporter v2.0.0
-        uses: actions/checkout@v4
-        with:
-          repository: luk-gg/UnrealExporter
-          ref: v2.0.0
-          submodules: false
-          path: UnrealExporterSource
-      - name: Checkout pinned CUE4Parse
-        uses: actions/checkout@v4
-        with:
-          repository: FabianFG/CUE4Parse
-          ref: 5c2a8ba99c0ea3e39d3743e12960a2fa0ce17e89
-          path: UnrealExporterSource/CUE4Parse
       - name: Setup .NET 9
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
-      - name: Publish Linux self-contained
+
+      - name: Download Windows release and extract managed bundle
         run: |
-          dotnet publish UnrealExporterSource/UnrealExporter/UnrealExporter.csproj \
-            -c Release -r linux-x64 --self-contained true \
-            -p:PublishSingleFile=false \
-            -o publish-linux
-          chmod +x publish-linux/UnrealExporter || true
-          ls -lah publish-linux
+          curl -L --fail --retry 3 -o release.zip \
+            https://github.com/luk-gg/UnrealExporter/releases/download/v2.0.0/UnrealExporter-2.0.0.zip
+          unzip -q release.zip -d release
+          cat > extract_bundle.py <<'PY'
+          import struct,zlib
+          from pathlib import Path
+          exe=next(Path('release').rglob('UnrealExporter.exe'))
+          b=exe.read_bytes()
+          sig=bytes.fromhex('8b1202b96a612038727b930214d7a03213f5b9e6efae3318ee3b2dce24b36aae')
+          si=b.find(sig); ho=struct.unpack_from('<Q',b,si-8)[0]
+          class R:
+            def __init__(self,b,p): self.b=b; self.p=p
+            def u32(self): v=struct.unpack_from('<I',self.b,self.p)[0]; self.p+=4; return v
+            def u64(self): v=struct.unpack_from('<Q',self.b,self.p)[0]; self.p+=8; return v
+            def u8(self): v=self.b[self.p]; self.p+=1; return v
+            def s(self):
+              n=0; sh=0
+              while True:
+                x=self.u8(); n|=(x&0x7f)<<sh
+                if x<128: break
+                sh+=7
+              x=self.b[self.p:self.p+n]; self.p+=n; return x.decode()
+          r=R(b,ho); major=r.u32(); minor=r.u32(); count=r.u32(); bundle_id=r.s()
+          deps=(r.u64(),r.u64()); runtime=(r.u64(),r.u64()); flags=r.u64()
+          out=Path('managed'); out.mkdir()
+          for _ in range(count):
+            off,size,csize=r.u64(),r.u64(),r.u64(); typ=r.u8(); name=r.s()
+            raw=b[off:off+(csize or size)]
+            data=zlib.decompress(raw,-15) if csize else raw
+            dst=out/name; dst.parent.mkdir(parents=True,exist_ok=True); dst.write_bytes(data)
+          print('bundle',major,minor,count,bundle_id)
+          PY
+          python extract_bundle.py
+          cp -r release/UnrealExporter-2.0.0/configs managed/ || true
+          cp -r release/UnrealExporter-2.0.0/mappings managed/ || true
+          cp -r release/UnrealExporter-2.0.0/checkpoints managed/ || true
+          cp -r release/UnrealExporter-2.0.0/examples managed/ || true
+          cp release/UnrealExporter-2.0.0/aes.txt managed/ || true
+          cp release/UnrealExporter-2.0.0/olderkeys.txt managed/ || true
+
+      - name: Build Linux self-contained reflection host
+        run: |
+          mkdir host
+          cat > host/Host.csproj <<'XML'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net9.0</TargetFramework>
+              <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+              <SelfContained>true</SelfContained>
+              <PublishSingleFile>false</PublishSingleFile>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+            </PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
+              <PackageReference Include="Blake3" Version="2.0.0" />
+            </ItemGroup>
+          </Project>
+          XML
+          cat > host/Program.cs <<'CS'
+          using System.Reflection;
+          using System.Runtime.Loader;
+          var baseDir = AppContext.BaseDirectory;
+          var appDir = Path.Combine(baseDir, "app");
+          Directory.SetCurrentDirectory(appDir);
+          AssemblyLoadContext.Default.Resolving += (_, name) => {
+              var p = Path.Combine(appDir, name.Name + ".dll");
+              return File.Exists(p) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(p) : null;
+          };
+          var asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(appDir, "UnrealExporter.dll"));
+          var ep = asm.EntryPoint ?? throw new InvalidOperationException("No entry point");
+          object? result = ep.GetParameters().Length == 0 ? ep.Invoke(null, null) : ep.Invoke(null, new object?[] { args });
+          if (result is Task<int> ti) return await ti;
+          if (result is Task t) { await t; return 0; }
+          return result is int i ? i : 0;
+          CS
+          dotnet publish host/Host.csproj -c Release -r linux-x64 --self-contained true -o publish-linux
+          mkdir -p publish-linux/app
+          cp -a managed/. publish-linux/app/
+          # Keep Linux native assets from NuGet at the host root and app root for P/Invoke lookup.
+          find publish-linux -type f -name 'libSkiaSharp.so' -o -name 'libblake3_dotnet.so' | xargs -r -I{} cp -f {} publish-linux/app/
+          mv publish-linux/Host publish-linux/UnrealExporterLinux
+          chmod +x publish-linux/UnrealExporterLinux
+          ./publish-linux/UnrealExporterLinux --help > help.txt || true
+          cat help.txt
+
       - name: Upload Linux build
         uses: actions/upload-artifact@v4
         with:
