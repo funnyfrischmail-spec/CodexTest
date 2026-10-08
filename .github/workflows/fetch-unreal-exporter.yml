@@ -1,0 +1,23 @@
+name: Fetch UnrealExporter
+on:
+  push:
+    paths:
+      - '.github/workflows/fetch-unreal-exporter.yml'
+  workflow_dispatch:
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download UnrealExporter release
+        run: |
+          curl -L --fail --retry 3 -o UnrealExporter-2.0.0.zip \
+            https://github.com/luk-gg/UnrealExporter/releases/download/v2.0.0/UnrealExporter-2.0.0.zip
+          sha256sum UnrealExporter-2.0.0.zip
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: UnrealExporter-2.0.0
+          path: UnrealExporter-2.0.0.zip
+          compression-level: 0
+          retention-days: 1
