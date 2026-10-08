@@ -14,8 +14,14 @@ jobs:
         with:
           repository: luk-gg/UnrealExporter
           ref: main
-          submodules: recursive
+          submodules: false
           path: UnrealExporterSource
+      - name: Checkout current CUE4Parse replacement
+        uses: actions/checkout@v4
+        with:
+          repository: FabianFG/CUE4Parse
+          ref: master
+          path: UnrealExporterSource/CUE4Parse
       - name: Setup .NET 9
         uses: actions/setup-dotnet@v4
         with:
